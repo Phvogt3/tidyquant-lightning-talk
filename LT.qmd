@@ -258,6 +258,8 @@ Dancho, M. (2024). *Core Functions in tidyquant* [package vignette]. CRAN.
 Dancho, M. (2024). *Performance Analysis with tidyquant* [package vignette]. CRAN.
 
 Price data accessed via Yahoo Finance through `tq_get()` at render time.
+
+https://github.com/Phvogt3/tidyquant-lightning-talk
 :::
 
 ::: {.column width="40%"}
