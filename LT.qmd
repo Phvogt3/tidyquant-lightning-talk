@@ -1,0 +1,269 @@
+---
+title: "Market Timing and Stock Picking"
+subtitle: "Two ways investors try to beat the S&P 500, tested with tidyquant"
+author: "Phillip Vogt"
+date: "April 2026"
+format:
+  revealjs:
+    theme: league
+    slide-number: true
+    code-overflow: wrap
+    fig-align: center
+    embed-resources: true
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+```{r setup}
+library(tidyquant)
+library(tidyverse)
+library(scales)
+library(kableExtra)
+
+
+start_date <- "2021-04-01"
+end_date   <- Sys.Date()
+
+spy <- tq_get("SPY", from = start_date, to = end_date)
+
+spy_returns <- spy %>%
+  tq_transmute(select  = adjusted,
+               mutate_fun = periodReturn,
+               period = "daily",
+               col_rename = "ret")
+
+tickers <- c("META", "NVDA", "KO", "LLY",
+             "AMZN", "MSFT", "BRK-B", "V")
+
+prices <- tq_get(tickers, from = start_date, to = end_date)
+
+stock_returns <- prices %>%
+  group_by(symbol) %>%
+  tq_transmute(select     = adjusted,
+               mutate_fun = periodReturn,
+               period     = "daily",
+               col_rename = "ret")
+
+weights <- tibble(symbol = tickers,
+                  weight = 1 / length(tickers))
+
+port_returns <- stock_returns %>%
+  tq_portfolio(assets_col  = symbol,
+               returns_col = ret,
+               weights= weights,
+               col_rename  = "ret")
+
+combined <- bind_rows(
+  port_returns %>% mutate(series = "Portfolio"),
+  spy_returns  %>% mutate(series = "SPY")
+) %>%
+  group_by(series) %>%
+  arrange(date, .by_group = TRUE) %>%
+  mutate(cum_value = cumprod(1 + ret),
+         running_max = cummax(cum_value),
+         drawdown = (cum_value - running_max) / running_max) %>%
+  ungroup()
+
+miss_top_n <- function(returns, n) {
+  if (n == 0) return(prod(1 + returns) - 1)
+  threshold <- sort(returns, decreasing = TRUE)[n]
+  adjusted  <- ifelse(returns >= threshold, 0, returns)
+  prod(1 + adjusted) - 1
+}
+
+ns <- c(0, 5, 10, 25)
+miss_results <- tibble(
+  scenario = factor(c("Fully invested",
+                      "Miss top 5 days",
+                      "Miss top 10 days",
+                      "Miss top 25 days"),
+                    levels = c("Fully invested",
+                               "Miss top 5 days",
+                               "Miss top 10 days",
+                               "Miss top 25 days")),
+  total_return = map_dbl(ns, ~ miss_top_n(spy_returns$ret, .x))
+)
+
+col_portfolio <- "#1f4e79"
+col_spy       <- "#b04a3c"
+col_neutral   <- "#9aa3a8"
+
+academic_theme <- theme_minimal(base_size = 14) +
+  theme(
+    plot.background = element_rect(fill = "white", color = NA),
+    panel.background= element_rect(fill = "white", color = NA),
+    legend.background= element_rect(fill = "white", color = NA),
+    legend.key  = element_rect(fill = "white", color = NA),
+    text     = element_text(color = "gray15"),
+    axis.text = element_text(color = "gray15", size = 11),
+    axis.title = element_text(color = "gray15", size = 12),
+    axis.title.x  = element_text(margin = margin(t = 10)),
+    axis.title.y  = element_text(margin = margin(r = 10)),
+    panel.grid.major  = element_line(color = "gray88"),
+    panel.grid.minor  = element_line(color = "gray94"),
+    legend.position  = "top",
+    legend.title  = element_blank(),
+    legend.text = element_text(size = 11, color = "gray15"),
+    plot.caption= element_text(size = 10, color = "gray45", hjust = 0,
+                                     margin = margin(t = 10)),
+    plot.margin = margin(15, 20, 15, 20))
+```
+
+## Two ways people try to beat the market
+
+1. **Market timing**: moving in and out at the "right" moments.
+2. **Stock picking**: holding a small group of stocks you believe in.
+
+Both are tested here against the S&P 500 from April 2021 to April 2026.
+
+
+## Data and methods
+
+Daily stock prices are pulled with **tidyquant**, an R package built around Yahoo Finance.
+
+```{r}
+#| echo: true
+#| eval: false
+library(tidyquant)
+
+prices <- tq_get("SPY",
+                 from = "2021-04-01",
+                 to   = Sys.Date())
+```
+## Test 1: The cost of missing the wrong days
+
+What if an investor missed only the market's biggest up days?
+
+To measure this, the *number (N)* of largest single day gains in SPY are replaced with zero modeling an investor who was not invested at all during those exact days. The total return is then compared to staying fully invested.
+
+## Test 1: A few days carry most of the return
+
+```{r missing-days-plot}
+#| fig-width: 10
+#| fig-height: 4.8
+ggplot(miss_results,
+       aes(x = scenario, y = total_return,
+           fill = scenario == "Fully invested")) +
+  geom_col(width = 0.65) +
+  geom_text(aes(label = percent(total_return, accuracy = 1)),
+            vjust = -0.6, color = "gray15", size = 4.6, fontface = "bold") +
+  scale_y_continuous(labels = percent_format(),
+                     expand = expansion(mult = c(0.02, 0.18))) +
+  scale_fill_manual(values = c("TRUE" = col_portfolio, "FALSE" = col_neutral),
+                    guide = "none") +
+  labs(x= NULL,
+       y = "Total return, April 2021 – April 2026",
+       caption = "SPY total return when the N largest daily gains are set to zero. Source: Yahoo Finance via tidyquant.") +
+  academic_theme
+```
+
+## Test 1: What this means
+
+Out of roughly 1,260 trading days in five years, fewer than 25 carry most of the return.
+
+Anyone trying to time the market runs the risk of missing these days. The penalty for being out of the market then is huge.
+
+
+## Test 2: Personal portfolio
+
+Eight stocks, all held over the same window:
+
+**META, NVDA, AMZN, MSFT, LLY, V, BRK-B, KO**
+
+
+## Test 2: Did the picks beat the market on returns?
+
+```{r returns-plot}
+#| fig-width: 10
+#| fig-height: 4.8
+ggplot(combined, aes(x = date, y = cum_value, color = series)) +
+  geom_line(linewidth = 1.0) +
+  scale_y_continuous(labels = function(x) percent(x - 1, accuracy = 1),
+                     breaks = scales::pretty_breaks(n = 6)) +
+  scale_x_date(date_breaks = "1 year", date_labels = "%Y") +
+  scale_color_manual(values = c("Portfolio" = col_portfolio,
+                                "SPY"   = col_spy),
+                     labels = c("Portfolio (8 stocks, equal-weighted)",
+                                "S&P 500 (SPY)")) +
+  labs(x = NULL,
+       y = "Cumulative return",
+       caption = "Growth of $1 invested at the start of April 2021. Source: Yahoo Finance via tidyquant.") +
+  academic_theme
+```
+
+## Test 2: Risk vs. return at a glance
+
+```{r risk-return-plot}
+#| fig-width: 9
+#| fig-height: 5.2
+stats <- combined %>%
+  group_by(series) %>%
+  summarise(
+    total_return = last(cum_value) - 1,
+    annualized   = (last(cum_value))^(252 / n()) - 1,
+    annual_vol   = sd(ret) * sqrt(252),
+    max_dd       = min(drawdown),
+    sharpe       = annualized / annual_vol,
+    .groups = "drop"
+  )
+
+ggplot(stats, aes(x = annual_vol, y = annualized, color = series)) +
+  geom_point(size = 7) +
+  geom_text(aes(label = paste0(series,
+                               "\nSharpe ", number(sharpe, accuracy = 0.01))),
+            vjust = -0.9, hjust = 0.5,
+            color = "gray15", size = 5, fontface = "bold",
+            lineheight = 1.0) +
+  scale_x_continuous(labels = percent_format(accuracy = 1),
+                     limits = c(0, max(stats$annual_vol) * 1.45),
+                     expand = expansion(mult = c(0.05, 0.05))) +
+  scale_y_continuous(labels = percent_format(accuracy = 1),
+                     limits = c(0, max(stats$annualized) * 1.45),
+                     expand = expansion(mult = c(0.05, 0.05))) +
+  scale_color_manual(values = c("Portfolio" = col_portfolio, "SPY" = col_spy),
+                     guide = "none") +
+  labs(x = "Annual volatility (risk)",
+       y = "Annualized return",
+       caption = "Each point is a strategy. Sharpe ratio = return per unit of risk taken (higher is better).") +
+  academic_theme
+```
+
+
+## Test 2: What this means
+
+The personal portfolio beat SPY on total return but only because it stayed invested through a much steeper drop in 2022.
+
+Higher returns came with much higher risk. Most retail investors sell during big drops and miss the recovery.
+
+## Conclusions
+
+Two main findings:
+
+1. **Timing fails.** The market's best days can't be predicted, and missing them destroys returns.
+2. **Picking can outperform at a cost.** Higher returns come with much higher risk. 
+
+The data supports long term investing in a broad index over trying to outsmart the market.
+
+## References {.smaller}
+
+::: {.columns}
+
+::: {.column width="60%"}
+Dancho, M. (2024). *tidyquant: Tidy Quantitative Financial Analysis.* R package version 1.0.7. CRAN.
+
+Dancho, M. (2024). *Core Functions in tidyquant* [package vignette]. CRAN.
+
+Dancho, M. (2024). *Performance Analysis with tidyquant* [package vignette]. CRAN.
+
+Price data accessed via Yahoo Finance through `tq_get()` at render time.
+:::
+
+::: {.column width="40%"}
+**Phillip Vogt**
+
+Baylor University
+:::
+
+:::
